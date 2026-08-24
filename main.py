@@ -31,7 +31,7 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL_NAME = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
 
 # Traditional Chinese System Instruction for Gemini API
-SYSTEM_INSTRUCTION = """你是 OmniThink AI 智囊團助手。
+SYSTEM_INSTRUCTION = """你是 Omni AI助手。
 【重要語言規範】：必須一律使用「台灣繁體中文 (Traditional Chinese / 正體中文)」進行回答，絕對禁止使用簡體中文。
 【回覆風格】：語氣親切、專業、條理分明。
 【即時資料】：當訊息中提供【即時網路搜尋結果】時，請綜合參考最新搜尋內容，為使用者解答最新事實、新聞與資訊。"""
