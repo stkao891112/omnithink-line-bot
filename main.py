@@ -270,6 +270,47 @@ group_chat_history = defaultdict(lambda: deque(maxlen=20))
 # Image cache dictionary per chat_key: {chat_key: deque([(PIL_Image, timestamp)], maxlen=10)}
 user_image_cache = defaultdict(lambda: deque(maxlen=10))
 
+# Image translation mode state per chat_key: {chat_key: {"enabled": bool, "target_lang": str, "waiting_for_lang": bool}}
+user_translate_mode = {}
+
+
+def handle_translation_mode_commands(chat_key: str, text: str):
+    """
+    Handle activation/deactivation and language selection for Image Translation Mode.
+    Returns reply text if a command was processed, otherwise None.
+    """
+    clean_text = text.lower().strip()
+
+    # Deactivation command
+    if any(k in clean_text for k in ["解除圖片翻譯模式", "關閉圖片翻譯模式", "關閉圖片翻譯", "退出翻譯模式", "關閉翻譯模式", "關閉翻譯"]):
+        if chat_key in user_translate_mode:
+            del user_translate_mode[chat_key]
+        return "呀哈！【圖片翻譯模式】已成功解除！烏薩奇已恢復為一般對話與問答模式囉！烏拉！✨🐰"
+
+    # Activation command
+    if any(k in clean_text for k in ["啟用圖片翻譯模式", "幫我翻譯圖片", "開啟圖片翻譯模式", "開啟圖片翻譯", "圖片翻譯模式"]):
+        # Extract target language if present in the text
+        target_lang = None
+        for lang in ["英文", "日文", "韓文", "繁體中文", "中文", "德文", "法文", "西班牙文", "義大利文", "越南文", "泰文", "印尼文"]:
+            if lang in text:
+                target_lang = lang
+                break
+
+        if target_lang:
+            user_translate_mode[chat_key] = {"enabled": True, "target_lang": target_lang, "waiting_for_lang": False}
+            return f"呀哈！已為您開啟【圖片翻譯模式】📸（目標語言：【{target_lang}】）！\n接下來請直接傳送圖片，烏薩奇會自動為您翻譯這張圖片的內容喔！烏拉！✨🐰"
+        else:
+            user_translate_mode[chat_key] = {"enabled": True, "target_lang": None, "waiting_for_lang": True}
+            return "呀哈！準備開啟圖片翻譯模式！📸\n請告訴烏薩奇您想翻譯成什麼語言呢？（例如直接打字回覆：「英文」、「日文」、「韓文」或「繁體中文」）！"
+
+    # Waiting for target language specification
+    if chat_key in user_translate_mode and user_translate_mode[chat_key].get("waiting_for_lang"):
+        target_lang = text.strip()
+        user_translate_mode[chat_key] = {"enabled": True, "target_lang": target_lang, "waiting_for_lang": False}
+        return f"呀哈！已設定目標語言為【{target_lang}】！\n【圖片翻譯模式】已正式啟動 📸！接下來傳送圖片，烏薩奇會自動翻譯為【{target_lang}】喔！烏拉！✨🐰"
+
+    return None
+
 
 def get_recent_cached_images(chat_key: str, max_age_seconds: float = 120.0):
     """Retrieve all recent valid cached images for chat_key within max_age_seconds."""
@@ -309,10 +350,15 @@ if handler:
             if chat_key in user_chats:
                 del user_chats[chat_key]
             group_chat_history[chat_key].clear()
+            if chat_key in user_translate_mode:
+                del user_translate_mode[chat_key]
             if gemini_model:
                 user_chats[chat_key] = gemini_model.start_chat(history=[])
             logger.info(f"HARD RESET: Successfully cleared chat session for [{chat_key}]")
             reply_text = "🧹【系統通知】對話記憶與群組歷史已徹底重置！烏薩奇已恢復為全新初始狀態囉。"
+        # Check Image Translation Mode commands
+        elif handle_translation_mode_commands(chat_key, user_text):
+            reply_text = handle_translation_mode_commands(chat_key, user_text)
         # Check Gemini API setup
         elif not gemini_model:
             reply_text = "⚠️ 系統尚未設定有效的 GEMINI_API_KEY，請在 .env 中填寫金鑰。"
@@ -481,13 +527,44 @@ if handler:
             logger.error(f"Error fetching/caching image from LINE API: {e}")
             return
 
-        # In Group/Room chats: Silently cache image without sending reply (0 spam in group!)
-        # Group members can subsequent Tag @烏薩奇 with text questions about the image.
-        if source_type != "user":
-            logger.info(f"Silently cached group image for [{chat_key}] without replying.")
-            return
+        # Check if Image Translation Mode is active and target language is specified
+        trans_mode = user_translate_mode.get(chat_key)
+        if trans_mode and trans_mode.get("enabled") and trans_mode.get("target_lang"):
+            target_lang = trans_mode["target_lang"]
+            logger.info(f"Image Translation Mode ACTIVE for [{chat_key}] (target_lang: {target_lang}). Executing auto-translation...")
 
-        reply_text = "呀哈！收到圖片囉 📸 烏薩奇已為你暫存這張照片！您可以隨時打字發問（例如：「這是什麼？」或「幫我翻譯」）囉！"
+            def _process_image_translation():
+                try:
+                    prompt = (
+                        f"【任務：圖片翻譯模式】\n"
+                        f"請詳細辨識這張圖片上的所有文字與內容，將其完整翻譯為【{target_lang}】！\n"
+                        f"請以烏薩奇的口吻（適度搭配叫聲與烏拉！呀哈！），為使用者做出：\n"
+                        f"1. 圖片內容簡覽\n"
+                        f"2. 【原文內容】\n"
+                        f"3. 【{target_lang}翻譯結果】"
+                    )
+                    response = gemini_model.generate_content([prompt, img])
+                    return response.text.strip() if response and response.text else f"呀哈！烏薩奇辨識完圖片了，但沒有找到需要翻譯成【{target_lang}】的文字喔！"
+                except Exception as e:
+                    logger.error(f"Error processing image translation: {e}")
+                    return "哈？圖片太複雜了，烏薩奇不知道！烏拉呀哈～！✨🐰"
+
+            try:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                    future = executor.submit(_process_image_translation)
+                    reply_text = future.result(timeout=60.0)
+            except concurrent.futures.TimeoutError:
+                reply_text = "哈？圖片太複雜了，烏薩奇不知道！烏拉呀哈～！✨🐰"
+            except Exception as e:
+                reply_text = "哈？圖片太複雜了，烏薩奇不知道！烏拉呀哈～！✨🐰"
+        else:
+            # In Group/Room chats: Silently cache image without sending reply (0 spam in group!)
+            # Group members can subsequent Tag @烏薩奇 with text questions about the image.
+            if source_type != "user":
+                logger.info(f"Silently cached group image for [{chat_key}] without replying.")
+                return
+
+            reply_text = "呀哈！收到圖片囉 📸 烏薩奇已為你暫存這張照片！您可以隨時打字發問（例如：「這是什麼？」或「幫我翻譯」）囉！"
 
         safe_reply_text = sanitize_line_text(reply_text)
         try:
