@@ -221,7 +221,7 @@ def sanitize_line_text(text: str, max_len: int = 4500) -> str:
 
 def is_bot_tagged(event: MessageEvent) -> bool:
     """
-    Check if the message is in a 1-on-1 direct chat, OR if the bot is strictly tagged/mentioned in a group/room chat.
+    Check if the message is in a 1-on-1 direct chat, OR if the bot is strictly tagged or mentioned by name (烏薩奇, usagi) in a group/room chat.
     """
     source_type = getattr(event.source, "type", "user")
 
@@ -229,7 +229,7 @@ def is_bot_tagged(event: MessageEvent) -> bool:
     if source_type == "user":
         return True
 
-    # In Group / Room chat: Check if bot is tagged/mentioned
+    # In Group / Room chat: Check if bot is strictly tagged/mentioned
     # 1. Official LINE Mention API check (is_self=True)
     mention = getattr(event.message, "mention", None)
     if mention and hasattr(mention, "mentionees"):
@@ -237,14 +237,22 @@ def is_bot_tagged(event: MessageEvent) -> bool:
             if getattr(m, "is_self", False):
                 return True
 
-    # 2. Strict Bot Name Keyword Check ONLY (烏薩奇, usagi, 兔兔)
-    # Avoid checking generic '@' or 'bot' which triggers when tagging other users
+    # 2. Strict Bot Name Keyword Check ONLY ("烏薩奇" or "usagi")
     user_text = getattr(event.message, "text", "").lower()
-    for name in ["烏薩奇", "usagi", "兔兔", "吉伊卡哇"]:
+    for name in ["烏薩奇", "usagi"]:
         if name in user_text:
             return True
 
     return False
+
+
+def is_pure_tag(text: str) -> bool:
+    """Check if user message is purely a Tag or Name call without any question or additional text."""
+    clean = text.lower()
+    for item in ["@", "烏薩奇", "usagi", "兔兔"]:
+        clean = clean.replace(item, "")
+    clean = clean.strip()
+    return len(clean) == 0
 
 
 from collections import defaultdict, deque
@@ -312,6 +320,18 @@ if handler:
                 if source_type != "user" and len(group_chat_history[chat_key]) > 1:
                     recent_context = "\n".join(group_chat_history[chat_key])
                     context_header = f"【群組近期對話歷史紀錄 (請參考成員們剛才討論的話題脈絡)】:\n{recent_context}\n\n"
+
+                # Check pure tag without question
+                if is_pure_tag(user_text):
+                    prompt_to_send = (
+                        f"{context_header}"
+                        f"{current_time_info}\n\n"
+                        f"【使用者動作】: 使用者單純 Tag/點名了你（沒有輸入其他發問文字）。\n"
+                        f"【特別要求】：請在回答的第一句高喊「到~~~~~~」，緊接著配上烏薩奇經典的叫聲與口頭禪（烏拉！呀哈！普魯魯魯！等）！"
+                    )
+                    response = chat_session.send_message(prompt_to_send)
+                    base_reply = response.text.strip() if response and response.text else "到~~~~~~！！ 呀哈！ 烏拉呀哈！ 普魯魯魯魯！"
+                    return base_reply
 
                 # Real-time search trigger check
                 search_keywords = ["搜尋", "查", "天氣", "新聞", "最新", "今天", "日期", "時間", "幾號", "星期", "股價", "賽事", "2026", "幾度", "誰是", "哪裡", "多少"]
