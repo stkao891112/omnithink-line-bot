@@ -336,12 +336,10 @@ def handle_auto_vision_mode_commands(chat_key: str, text: str):
     return None
 
 
-def get_recent_cached_images(chat_key: str, max_age_seconds: float = 120.0):
-    """Retrieve all recent valid cached images for chat_key within max_age_seconds."""
-    if chat_key in user_image_cache and user_image_cache[chat_key]:
-        now = time.time()
-        valid_imgs = [img for img, timestamp in user_image_cache[chat_key] if now - timestamp <= max_age_seconds]
-        return valid_imgs
+def get_recent_cached_images(chat_key: str):
+    """Retrieve all permanently stored cached images (up to 10 photos) for chat_key."""
+    if chat_key in user_image_cache:
+        return list(user_image_cache[chat_key])
     return []
 
 
@@ -541,7 +539,7 @@ if handler:
         if event.reply_token in DUMMY_REPLY_TOKENS:
             return
 
-        # Download and cache image into user_image_cache for 120 seconds
+        # Store image into user_image_cache permanently (rolling max 10 photos)
         try:
             import io
             import PIL.Image
@@ -550,8 +548,8 @@ if handler:
                 image_bytes = line_bot_blob_api.get_message_content(event.message.id)
 
             img = PIL.Image.open(io.BytesIO(image_bytes))
-            user_image_cache[chat_key].append((img, time.time()))
-            logger.info(f"Cached image for chat_key [{chat_key}] (total cached: {len(user_image_cache[chat_key])}) for 120 seconds.")
+            user_image_cache[chat_key].append(img)
+            logger.info(f"Cached image permanently for chat_key [{chat_key}] (total stored: {len(user_image_cache[chat_key])}).")
         except Exception as e:
             logger.error(f"Error fetching/caching image from LINE API: {e}")
             return
@@ -586,15 +584,15 @@ if handler:
                 reply_text = "哈？圖片太複雜了，烏薩奇不知道！烏拉呀哈～！✨🐰"
             except Exception as e:
                 reply_text = "哈？圖片太複雜了，烏薩奇不知道！烏拉呀哈～！✨🐰"
-        # Check if Auto Image Analysis Mode is active
-        elif user_auto_vision_mode.get(chat_key):
-            logger.info(f"Auto Vision Mode ACTIVE for [{chat_key}]. Executing auto-analysis...")
+        # 1-on-1 private chat OR Auto Image Analysis Mode: Auto-analyze images directly
+        elif source_type == "user" or user_auto_vision_mode.get(chat_key):
+            logger.info(f"Executing automatic vision analysis for [{chat_key}] (source: {source_type})...")
 
             def _process_auto_vision():
                 try:
                     prompt = (
                         "【任務：圖片自動解析模式】\n"
-                        "使用者已開啟圖片自動解析模式。請詳細辨識並描述這張圖片的內容、畫面細節、人物/物件、文字或美食！\n"
+                        "請詳細辨識並描述這張圖片的內容、畫面細節、人物/物件、文字或美食！\n"
                         "請以烏薩奇的口吻（適度搭配叫聲與烏拉！呀哈！），為使用者做出豐富有趣的圖片解析與評價！"
                     )
                     response = gemini_model.generate_content([prompt, img])
@@ -612,13 +610,10 @@ if handler:
             except Exception as e:
                 reply_text = "哈？圖片太複雜了，烏薩奇不知道！烏拉呀哈～！✨🐰"
         else:
-            # In Group/Room chats: Silently cache image without sending reply (0 spam in group!)
+            # In Group/Room chats with Auto Vision OFF: Silently cache image without replying (0 spam in group!)
             # Group members can subsequent Tag @烏薩奇 with text questions about the image.
-            if source_type != "user":
-                logger.info(f"Silently cached group image for [{chat_key}] without replying.")
-                return
-
-            reply_text = "呀哈！收到圖片囉 📸 烏薩奇已為你暫存這張照片！您可以隨時打字發問（例如：「這是什麼？」或「幫我翻譯」）囉！"
+            logger.info(f"Silently cached group image for [{chat_key}] without replying.")
+            return
 
         safe_reply_text = sanitize_line_text(reply_text)
         try:
