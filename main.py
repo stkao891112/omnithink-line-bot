@@ -10,10 +10,12 @@ from linebot.v3.messaging import (
     Configuration,
     ApiClient,
     MessagingApi,
+    MessagingApiBlob,
     ReplyMessageRequest,
+    PushMessageRequest,
     TextMessage
 )
-from linebot.v3.webhooks import MessageEvent, TextMessageContent
+from linebot.v3.webhooks import MessageEvent, TextMessageContent, ImageMessageContent
 
 # Google Gemini API import
 import google.generativeai as genai
@@ -417,3 +419,75 @@ if handler:
                         logger.info(f"Successfully delivered message to user [{user_id}] via fallback push_message!")
         except Exception as e:
             logger.error(f"Failed to send LINE reply or push: {e}")
+
+
+# Event handler for ImageMessage (Gemini Vision Image Reading)
+if handler:
+    @handler.add(MessageEvent, message=ImageMessageContent)
+    def handle_image_message(event: MessageEvent):
+        user_id = getattr(event.source, "user_id", "default_user")
+        source_type = getattr(event.source, "type", "user")
+        logger.info(f"Received IMAGE message from [{user_id}] (source: {source_type}): {event.message.id}")
+
+        if source_type != "user" and not is_bot_tagged(event):
+            logger.info(f"Ignored untagged image in {source_type} chat.")
+            return
+
+        DUMMY_REPLY_TOKENS = ["00000000000000000000000000000000", "ffffffffffffffffffffffffffffffff"]
+        if event.reply_token in DUMMY_REPLY_TOKENS:
+            return
+
+        if not gemini_model:
+            reply_text = "⚠️ 系統尚未設定有效的 GEMINI_API_KEY。"
+        else:
+            def _process_image_turn():
+                try:
+                    import io
+                    import PIL.Image
+                    with ApiClient(line_config) as api_client:
+                        line_bot_blob_api = MessagingApiBlob(api_client)
+                        image_bytes = line_bot_blob_api.get_message_content(event.message.id)
+
+                    img = PIL.Image.open(io.BytesIO(image_bytes))
+                    prompt = (
+                        "請以烏薩奇的口吻與說話風格（適度加入烏拉！呀哈！等叫聲），"
+                        "使用台灣繁體中文看圖說故事、詳細描述這張圖片的內容、文字或美食！"
+                    )
+                    response = gemini_model.generate_content([prompt, img])
+                    return response.text.strip() if response and response.text else "呀哈！本烏薩奇看到圖片了，但暫時無解！"
+                except Exception as e:
+                    logger.error(f"Error processing image with Gemini: {e}")
+                    return f"❌ 【圖片分析錯誤】看圖失敗：{e}"
+
+            try:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                    future = executor.submit(_process_image_turn)
+                    reply_text = future.result(timeout=4.5)
+            except concurrent.futures.TimeoutError:
+                reply_text = "⏱️ 【系統連線提示】圖片分析時間較長，已超時停止以維護連線。"
+            except Exception as e:
+                reply_text = f"❌ 【系統錯誤】圖片處理異常：{e}"
+
+        safe_reply_text = sanitize_line_text(reply_text)
+        try:
+            with ApiClient(line_config) as api_client:
+                line_bot_api = MessagingApi(api_client)
+                try:
+                    line_bot_api.reply_message(
+                        ReplyMessageRequest(
+                            reply_token=event.reply_token,
+                            messages=[TextMessage(text=safe_reply_text)]
+                        )
+                    )
+                    logger.info("Successfully sent image reply via reply_token.")
+                except Exception as reply_err:
+                    if user_id and user_id != "default_user":
+                        line_bot_api.push_message(
+                            PushMessageRequest(
+                                to=user_id,
+                                messages=[TextMessage(text=safe_reply_text)]
+                            )
+                        )
+                        logger.info(f"Successfully delivered image reply to user [{user_id}] via fallback push_message!")
+        except Exception as e:
+            logger.error(f"Failed to reply or push for image: {e}")
