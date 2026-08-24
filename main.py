@@ -457,44 +457,32 @@ if handler:
         chat_key = getattr(event.source, "group_id", None) or getattr(event.source, "room_id", None) or user_id
         logger.info(f"Received IMAGE message from [{user_id}] (source: {source_type}, chat_key: {chat_key}): {event.message.id}")
 
-        if source_type != "user" and not is_bot_tagged(event):
-            logger.info(f"Ignored untagged image in {source_type} chat.")
-            return
-
         DUMMY_REPLY_TOKENS = ["00000000000000000000000000000000", "ffffffffffffffffffffffffffffffff"]
         if event.reply_token in DUMMY_REPLY_TOKENS:
             return
 
-        if not gemini_model:
-            reply_text = "⚠️ 系統尚未設定有效的 GEMINI_API_KEY。"
-        else:
-            def _process_image_turn():
-                try:
-                    import io
-                    import PIL.Image
-                    with ApiClient(line_config) as api_client:
-                        line_bot_blob_api = MessagingApiBlob(api_client)
-                        image_bytes = line_bot_blob_api.get_message_content(event.message.id)
+        # Download and cache image into user_image_cache for 120 seconds
+        try:
+            import io
+            import PIL.Image
+            with ApiClient(line_config) as api_client:
+                line_bot_blob_api = MessagingApiBlob(api_client)
+                image_bytes = line_bot_blob_api.get_message_content(event.message.id)
 
-                    img = PIL.Image.open(io.BytesIO(image_bytes))
+            img = PIL.Image.open(io.BytesIO(image_bytes))
+            user_image_cache[chat_key] = (img, time.time())
+            logger.info(f"Cached image for chat_key [{chat_key}] (source: {source_type}) for 120 seconds.")
+        except Exception as e:
+            logger.error(f"Error fetching/caching image from LINE API: {e}")
+            return
 
-                    # Store image into user_image_cache for 120 seconds
-                    user_image_cache[chat_key] = (img, time.time())
-                    logger.info(f"Cached image for chat_key [{chat_key}] for 120 seconds.")
+        # In Group/Room chats: Silently cache image without sending reply (0 spam in group!)
+        # Group members can subsequent Tag @烏薩奇 with text questions about the image.
+        if source_type != "user":
+            logger.info(f"Silently cached group image for [{chat_key}] without replying.")
+            return
 
-                    return "呀哈！收到圖片囉 📸 烏薩奇已為你暫存這張照片！您可以隨時打字發問（例如：「這是什麼？」或「幫我翻譯」）囉！"
-                except Exception as e:
-                    logger.error(f"Error processing image with Gemini: {e}")
-                    return f"❌ 【圖片分析錯誤】看圖失敗：{e}"
-
-            try:
-                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                    future = executor.submit(_process_image_turn)
-                    reply_text = future.result(timeout=4.5)
-            except concurrent.futures.TimeoutError:
-                reply_text = "⏱️ 【系統連線提示】圖片分析時間較長，已超時停止以維護連線。"
-            except Exception as e:
-                reply_text = f"❌ 【系統錯誤】圖片處理異常：{e}"
+        reply_text = "呀哈！收到圖片囉 📸 烏薩奇已為你暫存這張照片！您可以隨時打字發問（例如：「這是什麼？」或「幫我翻譯」）囉！"
 
         safe_reply_text = sanitize_line_text(reply_text)
         try:
