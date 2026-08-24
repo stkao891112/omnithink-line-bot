@@ -267,19 +267,17 @@ user_chats = {}
 # Store rolling chat history per group/room/user (max 20 messages)
 group_chat_history = defaultdict(lambda: deque(maxlen=20))
 
-# Image cache dictionary per chat_key: {chat_key: (PIL_Image, timestamp)}
-user_image_cache = {}
+# Image cache dictionary per chat_key: {chat_key: deque([(PIL_Image, timestamp)], maxlen=3)}
+user_image_cache = defaultdict(lambda: deque(maxlen=3))
 
 
-def get_recent_cached_image(chat_key: str, max_age_seconds: float = 120.0):
-    """Retrieve cached image for chat_key if within max_age_seconds."""
-    if chat_key in user_image_cache:
-        img, timestamp = user_image_cache[chat_key]
-        if time.time() - timestamp <= max_age_seconds:
-            return img
-        else:
-            del user_image_cache[chat_key]
-    return None
+def get_recent_cached_images(chat_key: str, max_age_seconds: float = 120.0):
+    """Retrieve all recent valid cached images for chat_key within max_age_seconds."""
+    if chat_key in user_image_cache and user_image_cache[chat_key]:
+        now = time.time()
+        valid_imgs = [img for img, timestamp in user_image_cache[chat_key] if now - timestamp <= max_age_seconds]
+        return valid_imgs
+    return []
 
 
 # Event handler for TextMessage
@@ -385,13 +383,14 @@ if handler:
                 else:
                     prompt_to_send = f"{context_header}{current_time_info}\n\n【使用者問題/Tag】:\n{user_text}"
 
-                cached_img = get_recent_cached_image(chat_key)
-                if cached_img:
-                    logger.info(f"Found recent cached image for chat_key [{chat_key}]. Combining image with text question for Gemini Vision!")
+                cached_imgs = get_recent_cached_images(chat_key)
+                if cached_imgs:
+                    logger.info(f"Found {len(cached_imgs)} recent cached image(s) for chat_key [{chat_key}]. Combining image(s) with text question for Gemini Vision!")
                     prompt_to_send_with_img = f"【使用者隨圖片發問的問題】:\n{prompt_to_send}\n\n請務必看圖並結合使用者的文字發問，用烏薩奇的口吻做出精確回答。"
-                    response = gemini_model.generate_content([prompt_to_send_with_img, cached_img])
+                    content_list = [prompt_to_send_with_img] + cached_imgs
+                    response = gemini_model.generate_content(content_list)
                     if chat_key in user_image_cache:
-                        del user_image_cache[chat_key]
+                        user_image_cache[chat_key].clear()
                 else:
                     response = chat_session.send_message(prompt_to_send)
 
@@ -399,7 +398,7 @@ if handler:
                 return search_header + base_reply
 
             # Execute AI processing turn with dynamic timeout (9.0s for Vision images, 4.5s for text)
-            has_cached_img = chat_key in user_image_cache
+            has_cached_img = bool(get_recent_cached_images(chat_key))
             turn_timeout = 9.0 if has_cached_img else 4.5
             try:
                 with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
@@ -470,8 +469,8 @@ if handler:
                 image_bytes = line_bot_blob_api.get_message_content(event.message.id)
 
             img = PIL.Image.open(io.BytesIO(image_bytes))
-            user_image_cache[chat_key] = (img, time.time())
-            logger.info(f"Cached image for chat_key [{chat_key}] (source: {source_type}) for 120 seconds.")
+            user_image_cache[chat_key].append((img, time.time()))
+            logger.info(f"Cached image for chat_key [{chat_key}] (total cached: {len(user_image_cache[chat_key])}) for 120 seconds.")
         except Exception as e:
             logger.error(f"Error fetching/caching image from LINE API: {e}")
             return
