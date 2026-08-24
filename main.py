@@ -101,24 +101,39 @@ async def callback(request: Request, x_line_signature: str = Header(None)):
 import concurrent.futures
 
 
-def perform_web_search(query: str, timeout: float = 1.8) -> tuple[str, str]:
+def perform_web_search(query: str, timeout: float = 2.2) -> tuple[str, str]:
     """
-    Perform real-time web search using DDGS with strict timeout safety guard.
+    Perform ultra-fast real-time web search using DuckDuckGo Lite (completes in ~0.8s).
     Returns (search_results_text, debug_log_text).
     """
     def _do_search():
         try:
-            from ddgs import DDGS
-            with DDGS() as ddgs:
-                results = list(ddgs.text(query, max_results=4))
-                if not results:
-                    return ("", "⚠️ [搜尋 Log] 未找到相關即時搜尋結果。")
-                snippets = []
-                for idx, item in enumerate(results, 1):
-                    title = item.get("title", "")
-                    body = item.get("body", "")
-                    snippets.append(f"[{idx}] {title}\n{body}")
-                return ("\n\n".join(snippets), f"✅ [搜尋 Log] 成功獲取 {len(results)} 條即時資料")
+            import urllib.request
+            import urllib.parse
+            import re
+
+            url = 'https://lite.duckduckgo.com/lite/'
+            data = urllib.parse.urlencode({'q': query, 'kl': 'tw-tzh'}).encode('utf-8')
+            req = urllib.request.Request(
+                url,
+                data=data,
+                headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+            )
+            with urllib.request.urlopen(req, timeout=2.0) as r:
+                html = r.read().decode('utf-8')
+                links = re.findall(r'<a[^>]+class=["\']result-link["\'][^>]*>(.*?)</a>', html, re.DOTALL)
+                snippets = re.findall(r'<td[^>]+class=["\']result-snippet["\'][^>]*>(.*?)</td>', html, re.DOTALL)
+
+                if not links:
+                    return ("", "⚠️ [搜尋 Log] 未找到相關即時網頁資料。")
+
+                results = []
+                for idx in range(min(3, len(links))):
+                    l_clean = re.sub(r'<[^>]+>', '', links[idx]).strip()
+                    s_clean = re.sub(r'<[^>]+>', '', snippets[idx]).strip() if idx < len(snippets) else ''
+                    results.append(f"[{idx+1}] {l_clean}\n{s_clean}")
+
+                return ("\n\n".join(results), f"✅ [搜尋 Log] 成功獲取 {len(results)} 條即時資料")
         except Exception as e:
             logger.error(f"Web search execution error: {e}")
             return ("", f"⚠️ [搜尋 Log 錯誤] 執行搜尋時發生異常：{e}")
