@@ -115,40 +115,70 @@ async def callback(request: Request, background_tasks: BackgroundTasks, x_line_s
 import concurrent.futures
 
 
-def perform_web_search(query: str, timeout: float = 2.5) -> tuple[str, str]:
+def perform_web_search(query: str, timeout: float = 2.0) -> tuple[str, str]:
     """
-    Perform ultra-fast real-time web search using primp Chrome TLS impersonation (bypasses cloud IP blocking on Render).
+    Perform ultra-fast real-time web search with multi-provider cloud-friendly fallbacks.
     Returns (search_results_text, debug_log_text).
     """
     def _do_search():
+        import urllib.request
+        import urllib.parse
+        import json
+        import re
+
+        # Provider 1: Weather queries (wttr.in - 100% cloud friendly, ~0.5s response)
+        if any(kw in query for kw in ["天氣", "氣溫", "幾度", "下雨"]):
+            location = "Taipei"
+            for city in ["台北", "臺北", "台中", "臺中", "高雄", "台南", "臺南", "新竹", "桃園", "宜蘭", "花蓮", "台東"]:
+                if city in query:
+                    location = city
+                    break
+            url = f"https://wttr.in/{urllib.parse.quote(location)}?format=4&lang=zh-tw"
+            req = urllib.request.Request(url, headers={'User-Agent': 'curl/7.68.0'})
+            try:
+                with urllib.request.urlopen(req, timeout=1.8) as r:
+                    weather_text = r.read().decode('utf-8').strip()
+                    if weather_text:
+                        return (f"即時天氣資料 ({location}): {weather_text}", f"✅ [搜尋 Log] 成功獲取 {location} 即時天氣資料")
+            except Exception as e:
+                logger.warning(f"wttr.in Weather API error: {e}")
+
+        # Provider 2: General & Fact queries (Wikipedia / OpenSearch API - ~0.3s response)
+        try:
+            wiki_url = f"https://zh.wikipedia.org/w/api.php?action=opensearch&search={urllib.parse.quote(query)}&limit=3&format=json"
+            req = urllib.request.Request(wiki_url, headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(req, timeout=1.8) as r:
+                data = json.loads(r.read().decode('utf-8'))
+                titles = data[1] if len(data) > 1 else []
+                snippets = data[2] if len(data) > 2 else []
+                results = []
+                for i in range(len(titles)):
+                    results.append(f"[{i+1}] {titles[i]}\n{snippets[i] if i < len(snippets) else ''}")
+                if results:
+                    return ("\n\n".join(results), f"✅ [搜尋 Log] 成功獲取 {len(results)} 條維基與百科即時資料")
+        except Exception as e:
+            logger.warning(f"Wikipedia OpenSearch API error: {e}")
+
+        # Provider 3: Fallback via primp Chrome TLS impersonation
         try:
             import primp
-            import urllib.parse
-            import re
-
-            client = primp.Client(impersonate="chrome_120", follow_redirects=True, timeout=2.2)
+            client = primp.Client(impersonate="chrome_120", follow_redirects=True, timeout=1.8)
             url = f"https://html.duckduckgo.com/html/?q={urllib.parse.quote(query)}"
             resp = client.get(url)
-
-            if resp.status_code != 200:
-                return ("", f"⚠️ [搜尋 Log] 搜尋回應狀態碼 {resp.status_code}")
-
-            titles = re.findall(r'<a[^>]+class=["\']result__a["\'][^>]*>(.*?)</a>', resp.text, re.DOTALL)
-            snippets = re.findall(r'<a[^>]+class=["\']result__snippet["\'][^>]*>(.*?)</a>', resp.text, re.DOTALL)
-
-            if not titles:
-                return ("", "⚠️ [搜尋 Log] 未找到相關即時網頁資料。")
-
-            results = []
-            for i in range(min(3, len(titles))):
-                t_clean = re.sub(r'<[^>]+>', '', titles[i]).strip()
-                s_clean = re.sub(r'<[^>]+>', '', snippets[i]).strip() if i < len(snippets) else ""
-                results.append(f"[{i+1}] {t_clean}\n{s_clean}")
-
-            return ("\n\n".join(results), f"✅ [搜尋 Log] 成功獲取 {len(results)} 條即時資料")
+            if resp.status_code == 200:
+                titles = re.findall(r'<a[^>]+class=["\']result__a["\'][^>]*>(.*?)</a>', resp.text, re.DOTALL)
+                snippets = re.findall(r'<a[^>]+class=["\']result__snippet["\'][^>]*>(.*?)</a>', resp.text, re.DOTALL)
+                if titles:
+                    results = []
+                    for i in range(min(3, len(titles))):
+                        t_clean = re.sub(r'<[^>]+>', '', titles[i]).strip()
+                        s_clean = re.sub(r'<[^>]+>', '', snippets[i]).strip() if i < len(snippets) else ""
+                        results.append(f"[{i+1}] {t_clean}\n{s_clean}")
+                    return ("\n\n".join(results), f"✅ [搜尋 Log] 成功獲取 {len(results)} 條即時資料")
         except Exception as e:
-            logger.error(f"Web search execution error: {e}")
-            return ("", f"⚠️ [搜尋 Log 錯誤] 執行搜尋時發生異常：{e}")
+            logger.warning(f"Primp DDG search error: {e}")
+
+        return ("", "⚠️ [搜尋 Log] 未找到即時網頁資料。")
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
         future = executor.submit(_do_search)
@@ -288,16 +318,32 @@ if handler:
         # Sanitize reply_text to strictly obey LINE Messaging API 5000 chars limit & UTF-8 control chars
         safe_reply_text = sanitize_line_text(reply_text)
 
-        # Reply to LINE user
+        # Reply to LINE user with automatic push_message fallback
         try:
             with ApiClient(line_config) as api_client:
                 line_bot_api = MessagingApi(api_client)
-                line_bot_api.reply_message(
-                    ReplyMessageRequest(
-                        reply_token=event.reply_token,
-                        messages=[TextMessage(text=reply_text)]
+                try:
+                    line_bot_api.reply_message(
+                        ReplyMessageRequest(
+                            reply_token=event.reply_token,
+                            messages=[TextMessage(text=safe_reply_text)]
+                        )
                     )
-                )
-            logger.info("Successfully sent reply message to LINE.")
+                    logger.info("Successfully sent reply message via reply_token.")
+                except Exception as reply_err:
+                    logger.warning(f"reply_message failed ({reply_err}), attempting fallback push_message to user [{user_id}]...")
+                    if hasattr(reply_err, "body"):
+                        logger.warning(f"LINE Reply API Error Body: {getattr(reply_err, 'body', '')}")
+
+                    # Fallback to PushMessage using user_id if reply_token expired
+                    if user_id and user_id != "default_user":
+                        from linebot.v3.messaging import PushMessageRequest
+                        line_bot_api.push_message(
+                            PushMessageRequest(
+                                to=user_id,
+                                messages=[TextMessage(text=safe_reply_text)]
+                            )
+                        )
+                        logger.info(f"Successfully delivered message to user [{user_id}] via fallback push_message!")
         except Exception as e:
-            logger.error(f"Failed to send LINE reply: {e}")
+            logger.error(f"Failed to send LINE reply or push: {e}")
