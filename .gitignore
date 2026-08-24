@@ -1,0 +1,23 @@
+# Environment variables
+.env
+
+# Virtual Environment
+.venv/
+env/
+venv/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Executables & Local Tunnels
+cloudflared.exe
+*.exe
+
+# IDE & OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
