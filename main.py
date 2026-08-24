@@ -260,8 +260,15 @@ if handler:
                 
                 chat_session = user_chats[user_id]
                 
+                # Compute dynamic current local time in Taiwan (UTC+8)
+                import datetime
+                now_utc = datetime.datetime.now(datetime.timezone.utc)
+                now = now_utc.astimezone(datetime.timezone(datetime.timedelta(hours=8)))
+                weekday_map = {0: "一", 1: "二", 2: "三", 3: "四", 4: "五", 5: "六", 6: "日"}
+                current_time_info = f"【系統當前真實精確時間 (台灣時間 UTC+8)】：{now.year} 年 {now.month} 月 {now.day} 日 (星期{weekday_map[now.weekday()]})"
+
                 # Real-time search trigger check
-                search_keywords = ["搜尋", "查", "天氣", "新聞", "最新", "今天", "股價", "賽事", "2026", "幾度", "誰是", "哪裡", "多少"]
+                search_keywords = ["搜尋", "查", "天氣", "新聞", "最新", "今天", "日期", "時間", "幾號", "星期", "股價", "賽事", "2026", "幾度", "誰是", "哪裡", "多少"]
                 is_search_cmd = any(user_text.lower().startswith(prefix) for prefix in ["/search", "搜尋", "幫我查", "查一下", "查"])
                 should_search = is_search_cmd or any(kw in user_text for kw in search_keywords)
 
@@ -288,14 +295,15 @@ if handler:
                     if search_info:
                         search_header = "🌐 [已載入即時網路搜尋資料]\n\n"
                         prompt_to_send = (
-                            f"【即時網路搜尋結果】:\n{search_info}\n\n"
+                            f"{current_time_info}\n\n"
+                            f"【即時網路搜尋與氣象資料】:\n{search_info}\n\n"
                             f"【使用者問題】:\n{user_text}\n\n"
-                            f"請綜合參考上述最新搜尋結果，為使用者提供精確、即時且有條理的回答。"
+                            f"請務必參考【系統當前真實精確時間】與最新搜尋資料，為使用者回答正確的日期與資訊。"
                         )
                     else:
-                        prompt_to_send = user_text
+                        prompt_to_send = f"{current_time_info}\n\n【使用者問題】:\n{user_text}"
                 else:
-                    prompt_to_send = user_text
+                    prompt_to_send = f"{current_time_info}\n\n【使用者問題】:\n{user_text}"
 
                 response = chat_session.send_message(prompt_to_send)
                 base_reply = response.text.strip() if response and response.text else "抱歉，Gemini 未能產生回應。"
