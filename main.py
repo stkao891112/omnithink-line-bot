@@ -267,8 +267,8 @@ user_chats = {}
 # Store rolling chat history per group/room/user (max 20 messages)
 group_chat_history = defaultdict(lambda: deque(maxlen=20))
 
-# Image cache dictionary per chat_key: {chat_key: deque([(PIL_Image, timestamp)], maxlen=3)}
-user_image_cache = defaultdict(lambda: deque(maxlen=3))
+# Image cache dictionary per chat_key: {chat_key: deque([(PIL_Image, timestamp)], maxlen=10)}
+user_image_cache = defaultdict(lambda: deque(maxlen=10))
 
 
 def get_recent_cached_images(chat_key: str, max_age_seconds: float = 120.0):
