@@ -397,21 +397,27 @@ if handler:
                 base_reply = response.text.strip() if response and response.text else "抱歉，Gemini 未能產生回應。"
                 return search_header + base_reply
 
-            # Execute AI processing turn with dynamic timeout (9.0s for Vision images, 4.5s for text)
+            # Execute AI processing turn with dynamic timeout (60.0s for Vision images, 15.0s for text)
             has_cached_img = bool(get_recent_cached_images(chat_key))
-            turn_timeout = 9.0 if has_cached_img else 4.5
+            turn_timeout = 60.0 if has_cached_img else 15.0
             try:
                 with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
                     future = executor.submit(_process_ai_turn)
                     reply_text = future.result(timeout=turn_timeout)
             except concurrent.futures.TimeoutError:
                 logger.warning(f"Total processing for user [{user_id}] hit {turn_timeout}s timeout safety guard.")
-                reply_text = "⏱️ 【系統連線提示 Log】\n圖片或對話處理時間較長，已自動切換處理，請稍後再次測試！"
+                if has_cached_img:
+                    reply_text = "哈？圖片太複雜了，烏薩奇不知道！烏拉呀哈～！✨🐰"
+                else:
+                    reply_text = "哈？這個問題處理時間過長，烏薩奇不知道！烏拉呀哈～！✨🐰"
             except Exception as e:
                 logger.error(f"Gemini API error for user {user_id}: {e}")
                 if chat_key in user_chats:
                     del user_chats[chat_key]
-                reply_text = f"❌ 【系統錯誤 Log】\n- 類型: {type(e).__name__}\n- 詳情: {str(e)}\n\n(已為您重置該次對話 Session)"
+                if has_cached_img:
+                    reply_text = "哈？圖片太複雜了，烏薩奇不知道！烏拉呀哈～！✨🐰"
+                else:
+                    reply_text = f"❌ 【系統錯誤 Log】\n- 類型: {type(e).__name__}\n- 詳情: {str(e)}\n\n(已為您重置該次對話 Session)"
 
         # Sanitize reply_text to strictly obey LINE Messaging API 5000 chars limit & UTF-8 control chars
         safe_reply_text = sanitize_line_text(reply_text)
