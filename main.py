@@ -244,7 +244,7 @@ if handler:
             if gemini_model:
                 user_chats[user_id] = gemini_model.start_chat(history=[])
             logger.info(f"HARD RESET: Successfully cleared chat session for user [{user_id}]")
-            reply_text = "🧹【系統通知】對話記憶與歷史已徹底重置！Gemini AI 已恢復為全新初始狀態，我們可以開始新的話題囉。"
+            reply_text = "🧹【系統通知】對話記憶與歷史已徹底重置！烏薩奇已恢復為全新初始狀態，我們可以開始新的話題囉。"
         # Check Gemini API setup
         elif not gemini_model:
             reply_text = "⚠️ 系統尚未設定有效的 GEMINI_API_KEY，請在 .env 中填寫金鑰。"
@@ -268,7 +268,6 @@ if handler:
                 is_search_cmd = any(user_text.lower().startswith(prefix) for prefix in ["/search", "搜尋", "幫我查", "查一下", "查"])
                 should_search = is_search_cmd or any(kw in user_text for kw in search_keywords)
 
-                debug_log_note = ""
                 search_header = ""
 
                 if should_search:
@@ -283,10 +282,6 @@ if handler:
                     
                     logger.info(f"Executing real-time web search for query: {clean_query}")
                     search_info, search_log = perform_web_search(clean_query if clean_query else user_text, timeout=2.2)
-
-                    # Store debug log note if search had log message
-                    if search_log:
-                        debug_log_note = f"\n\n📌 系統狀態 Log:\n{search_log}"
 
                     if search_info:
                         search_header = "🌐 [已載入即時網路搜尋資料]\n\n"
@@ -303,7 +298,7 @@ if handler:
 
                 response = chat_session.send_message(prompt_to_send)
                 base_reply = response.text.strip() if response and response.text else "抱歉，Gemini 未能產生回應。"
-                return search_header + base_reply + debug_log_note
+                return search_header + base_reply
 
             # Execute AI processing turn with 4.2s hard timeout safety guard
             try:
