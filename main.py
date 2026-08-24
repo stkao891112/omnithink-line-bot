@@ -475,17 +475,12 @@ if handler:
                         image_bytes = line_bot_blob_api.get_message_content(event.message.id)
 
                     img = PIL.Image.open(io.BytesIO(image_bytes))
-                    
+
                     # Store image into user_image_cache for 120 seconds
                     user_image_cache[chat_key] = (img, time.time())
                     logger.info(f"Cached image for chat_key [{chat_key}] for 120 seconds.")
 
-                    prompt = (
-                        "請以烏薩奇的口吻與說話風格（適度加入烏拉！呀哈！等叫聲），"
-                        "使用台灣繁體中文簡短確認收到圖片，並親切告知使用者：『已為您暫存圖片 📸，您可以隨時打字發問（例如：「這是什麼？」或「幫我翻譯」）囉！』"
-                    )
-                    response = gemini_model.generate_content([prompt, img])
-                    return response.text.strip() if response and response.text else "呀哈！收到圖片囉 📸 烏薩奇已為你暫存這張照片！你可以隨時打字發問囉！"
+                    return "呀哈！收到圖片囉 📸 烏薩奇已為你暫存這張照片！您可以隨時打字發問（例如：「這是什麼？」或「幫我翻譯」）囉！"
                 except Exception as e:
                     logger.error(f"Error processing image with Gemini: {e}")
                     return f"❌ 【圖片分析錯誤】看圖失敗：{e}"
