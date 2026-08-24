@@ -176,6 +176,18 @@ def is_reset_command(text: str) -> bool:
     return False
 
 
+def sanitize_line_text(text: str, max_len: int = 4500) -> str:
+    """Sanitize and bound reply text for LINE Messaging API limits."""
+    if not text:
+        return "（無回應內文）"
+    import re
+    # Remove control characters except newlines and tabs
+    clean = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', str(text))
+    if len(clean) > max_len:
+        clean = clean[:max_len-35] + "\n\n...(內容過長已自動截斷)"
+    return clean
+
+
 # Store chat sessions per user_id
 user_chats = {}
 
@@ -232,7 +244,7 @@ if handler:
                             clean_query = clean_query[:-len(suffix)].strip()
                     
                     logger.info(f"Executing real-time web search for query: {clean_query}")
-                    search_info, search_log = perform_web_search(clean_query if clean_query else user_text, timeout=1.5)
+                    search_info, search_log = perform_web_search(clean_query if clean_query else user_text, timeout=2.2)
 
                     # Store debug log note if search had log message
                     if search_log:
@@ -243,7 +255,7 @@ if handler:
                         prompt_to_send = (
                             f"【即時網路搜尋結果】:\n{search_info}\n\n"
                             f"【使用者問題】:\n{user_text}\n\n"
-                            f"請綜合參考上述最新搜尋結果，使用台灣繁體中文為使用者提供精確、即時且有條理的回答。"
+                            f"請綜合參考上述最新搜尋結果，為使用者提供精確、即時且有條理的回答。"
                         )
                     else:
                         prompt_to_send = user_text
@@ -267,6 +279,9 @@ if handler:
                 if user_id in user_chats:
                     del user_chats[user_id]
                 reply_text = f"❌ 【系統錯誤 Log】\n- 類型: {type(e).__name__}\n- 詳情: {str(e)}\n\n(已為您重置該次對話 Session)"
+
+        # Sanitize reply_text to strictly obey LINE Messaging API 5000 chars limit & UTF-8 control chars
+        safe_reply_text = sanitize_line_text(reply_text)
 
         # Reply to LINE user
         try:
