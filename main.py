@@ -273,6 +273,9 @@ user_image_cache = defaultdict(lambda: deque(maxlen=10))
 # Image translation mode state per chat_key: {chat_key: {"enabled": bool, "target_lang": str, "waiting_for_lang": bool}}
 user_translate_mode = {}
 
+# Auto image analysis mode state per chat_key: {chat_key: bool}
+user_auto_vision_mode = {}
+
 
 def handle_translation_mode_commands(chat_key: str, text: str):
     """
@@ -308,6 +311,27 @@ def handle_translation_mode_commands(chat_key: str, text: str):
         target_lang = text.strip()
         user_translate_mode[chat_key] = {"enabled": True, "target_lang": target_lang, "waiting_for_lang": False}
         return f"呀哈！已設定目標語言為【{target_lang}】！\n【圖片翻譯模式】已正式啟動 📸！接下來傳送圖片，烏薩奇會自動翻譯為【{target_lang}】喔！烏拉！✨🐰"
+
+    return None
+
+
+def handle_auto_vision_mode_commands(chat_key: str, text: str):
+    """
+    Handle activation/deactivation for Auto Image Analysis Mode.
+    Returns reply text if a command was processed, otherwise None.
+    """
+    clean_text = text.lower().strip()
+
+    # Deactivation command
+    if any(k in clean_text for k in ["解除圖片自動解析模式", "關閉圖片自動解析模式", "關閉圖片自動解析", "關閉自動解析模式", "關閉自動解析", "退出自動解析模式", "退出自動解析"]):
+        if chat_key in user_auto_vision_mode:
+            del user_auto_vision_mode[chat_key]
+        return "呀哈！【圖片自動解析模式】已成功解除！烏薩奇已恢復為一般對話模式囉！烏拉！✨🐰"
+
+    # Activation command
+    if any(k in clean_text for k in ["啟用圖片自動解析模式", "接下來傳的圖片自動解析", "開啟圖片自動解析模式", "開啟圖片自動解析", "圖片自動解析模式", "開啟自動解析"]):
+        user_auto_vision_mode[chat_key] = True
+        return "呀哈！已為您開啟【圖片自動解析模式】📸！\n接下來只需直接傳送圖片（無需輸入任何額外文字），烏薩奇就會自動為您看圖說故事與詳細解析照片細節喔！烏拉！✨🐰"
 
     return None
 
@@ -352,6 +376,8 @@ if handler:
             group_chat_history[chat_key].clear()
             if chat_key in user_translate_mode:
                 del user_translate_mode[chat_key]
+            if chat_key in user_auto_vision_mode:
+                del user_auto_vision_mode[chat_key]
             if gemini_model:
                 user_chats[chat_key] = gemini_model.start_chat(history=[])
             logger.info(f"HARD RESET: Successfully cleared chat session for [{chat_key}]")
@@ -359,6 +385,9 @@ if handler:
         # Check Image Translation Mode commands
         elif handle_translation_mode_commands(chat_key, user_text):
             reply_text = handle_translation_mode_commands(chat_key, user_text)
+        # Check Auto Image Analysis Mode commands
+        elif handle_auto_vision_mode_commands(chat_key, user_text):
+            reply_text = handle_auto_vision_mode_commands(chat_key, user_text)
         # Check Gemini API setup
         elif not gemini_model:
             reply_text = "⚠️ 系統尚未設定有效的 GEMINI_API_KEY，請在 .env 中填寫金鑰。"
@@ -552,6 +581,31 @@ if handler:
             try:
                 with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
                     future = executor.submit(_process_image_translation)
+                    reply_text = future.result(timeout=60.0)
+            except concurrent.futures.TimeoutError:
+                reply_text = "哈？圖片太複雜了，烏薩奇不知道！烏拉呀哈～！✨🐰"
+            except Exception as e:
+                reply_text = "哈？圖片太複雜了，烏薩奇不知道！烏拉呀哈～！✨🐰"
+        # Check if Auto Image Analysis Mode is active
+        elif user_auto_vision_mode.get(chat_key):
+            logger.info(f"Auto Vision Mode ACTIVE for [{chat_key}]. Executing auto-analysis...")
+
+            def _process_auto_vision():
+                try:
+                    prompt = (
+                        "【任務：圖片自動解析模式】\n"
+                        "使用者已開啟圖片自動解析模式。請詳細辨識並描述這張圖片的內容、畫面細節、人物/物件、文字或美食！\n"
+                        "請以烏薩奇的口吻（適度搭配叫聲與烏拉！呀哈！），為使用者做出豐富有趣的圖片解析與評價！"
+                    )
+                    response = gemini_model.generate_content([prompt, img])
+                    return response.text.strip() if response and response.text else "呀哈！本烏薩奇看到圖片了，這張圖片太神奇了！"
+                except Exception as e:
+                    logger.error(f"Error processing auto vision: {e}")
+                    return "哈？圖片太複雜了，烏薩奇不知道！烏拉呀哈～！✨🐰"
+
+            try:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                    future = executor.submit(_process_auto_vision)
                     reply_text = future.result(timeout=60.0)
             except concurrent.futures.TimeoutError:
                 reply_text = "哈？圖片太複雜了，烏薩奇不知道！烏拉呀哈～！✨🐰"
