@@ -1,6 +1,6 @@
 import os
 import logging
-from fastapi import FastAPI, Request, HTTPException, Header
+from fastapi import FastAPI, Request, HTTPException, Header, BackgroundTasks
 from dotenv import load_dotenv
 
 # LINE Bot SDK v3 imports
@@ -80,7 +80,7 @@ async def root():
 
 
 @app.post("/callback")
-async def callback(request: Request, x_line_signature: str = Header(None)):
+async def callback(request: Request, background_tasks: BackgroundTasks, x_line_signature: str = Header(None)):
     """Webhook callback endpoint for LINE Messaging API."""
     if not handler:
         logger.error("LINE_CHANNEL_SECRET is not configured.")
@@ -94,15 +94,20 @@ async def callback(request: Request, x_line_signature: str = Header(None)):
     body_bytes = await request.body()
     body = body_bytes.decode("utf-8")
 
-    # Handle webhook body and verify signature
+    # Inline signature validation for fast security check
     try:
-        handler.handle(body, x_line_signature)
-    except InvalidSignatureError:
-        logger.error("Invalid LINE webhook signature.")
-        raise HTTPException(status_code=400, detail="Invalid signature. Please check Channel Secret.")
+        if not handler.parser.signature_validator.validate(body, x_line_signature):
+            logger.error("Invalid LINE webhook signature.")
+            raise HTTPException(status_code=400, detail="Invalid signature. Please check Channel Secret.")
     except Exception as e:
-        logger.error(f"Error handling webhook: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        if isinstance(e, HTTPException):
+            raise e
+        logger.error(f"Error validating webhook signature: {e}")
+        raise HTTPException(status_code=400, detail="Signature validation failed.")
+
+    # Dispatch event handling to background task so LINE receives 200 OK in < 0.01s!
+    # This prevents LINE Webhook connection timeouts and prevents reply_token invalidation!
+    background_tasks.add_task(handler.handle, body, x_line_signature)
 
     return "OK"
 
