@@ -246,8 +246,13 @@ def is_bot_tagged(event: MessageEvent) -> bool:
     return False
 
 
-# Store chat sessions per user_id
+from collections import defaultdict, deque
+
+# Store chat sessions per user/group
 user_chats = {}
+
+# Store rolling chat history per group/room/user (max 20 messages)
+group_chat_history = defaultdict(lambda: deque(maxlen=20))
 
 
 # Event handler for TextMessage
@@ -257,7 +262,11 @@ if handler:
         user_text = event.message.text.strip()
         user_id = getattr(event.source, "user_id", "default_user")
         source_type = getattr(event.source, "type", "user")
-        logger.info(f"Received message from [{user_id}] (source: {source_type}): {user_text}")
+        chat_key = getattr(event.source, "group_id", None) or getattr(event.source, "room_id", None) or user_id
+        logger.info(f"Received message from [{user_id}] (source: {source_type}, chat_key: {chat_key}): {user_text}")
+
+        # Record message into rolling chat history buffer for group context memory
+        group_chat_history[chat_key].append(f"【用戶{user_id[-4:]}】: {user_text}")
 
         # LINE Verify test event check (skip calling Gemini/reply for dummy tokens)
         DUMMY_REPLY_TOKENS = ["00000000000000000000000000000000", "ffffffffffffffffffffffffffffffff"]
@@ -267,27 +276,28 @@ if handler:
 
         # Check if bot is tagged/mentioned in group/room chat
         if not is_bot_tagged(event):
-            logger.info(f"Ignored untagged message in {source_type} chat.")
+            logger.info(f"Recorded message in {source_type} context buffer without replying (untagged).")
             return
 
         # Handle hard reset command
         if is_reset_command(user_text):
-            if user_id in user_chats:
-                del user_chats[user_id]
+            if chat_key in user_chats:
+                del user_chats[chat_key]
+            group_chat_history[chat_key].clear()
             if gemini_model:
-                user_chats[user_id] = gemini_model.start_chat(history=[])
-            logger.info(f"HARD RESET: Successfully cleared chat session for user [{user_id}]")
-            reply_text = "🧹【系統通知】對話記憶與歷史已徹底重置！烏薩奇已恢復為全新初始狀態，我們可以開始新的話題囉。"
+                user_chats[chat_key] = gemini_model.start_chat(history=[])
+            logger.info(f"HARD RESET: Successfully cleared chat session for [{chat_key}]")
+            reply_text = "🧹【系統通知】對話記憶與群組歷史已徹底重置！烏薩奇已恢復為全新初始狀態囉。"
         # Check Gemini API setup
         elif not gemini_model:
             reply_text = "⚠️ 系統尚未設定有效的 GEMINI_API_KEY，請在 .env 中填寫金鑰。"
         else:
             def _process_ai_turn():
-                # Get or create multi-turn chat session for this user
-                if user_id not in user_chats:
-                    user_chats[user_id] = gemini_model.start_chat(history=[])
+                # Get or create multi-turn chat session for this chat_key
+                if chat_key not in user_chats:
+                    user_chats[chat_key] = gemini_model.start_chat(history=[])
                 
-                chat_session = user_chats[user_id]
+                chat_session = user_chats[chat_key]
                 
                 # Compute dynamic current local time in Taiwan (UTC+8)
                 import datetime
@@ -295,6 +305,12 @@ if handler:
                 now = now_utc.astimezone(datetime.timezone(datetime.timedelta(hours=8)))
                 weekday_map = {0: "一", 1: "二", 2: "三", 3: "四", 4: "五", 5: "六", 6: "日"}
                 current_time_info = f"【系統當前真實精確時間 (台灣時間 UTC+8)】：{now.year} 年 {now.month} 月 {now.day} 日 (星期{weekday_map[now.weekday()]})"
+
+                # Format group context if history exists
+                context_header = ""
+                if source_type != "user" and len(group_chat_history[chat_key]) > 1:
+                    recent_context = "\n".join(group_chat_history[chat_key])
+                    context_header = f"【群組近期對話歷史紀錄 (請參考成員們剛才討論的話題脈絡)】:\n{recent_context}\n\n"
 
                 # Real-time search trigger check
                 search_keywords = ["搜尋", "查", "天氣", "新聞", "最新", "今天", "日期", "時間", "幾號", "星期", "股價", "賽事", "2026", "幾度", "誰是", "哪裡", "多少"]
@@ -319,15 +335,16 @@ if handler:
                     if search_info:
                         search_header = "🌐 [已載入即時網路搜尋資料]\n\n"
                         prompt_to_send = (
+                            f"{context_header}"
                             f"{current_time_info}\n\n"
                             f"【即時網路搜尋與氣象資料】:\n{search_info}\n\n"
-                            f"【使用者問題】:\n{user_text}\n\n"
-                            f"請務必參考【系統當前真實精確時間】與最新搜尋資料，為使用者回答正確的日期與資訊。"
+                            f"【使用者問題/Tag】:\n{user_text}\n\n"
+                            f"請綜合參考群組對話歷史與搜尋資料，為群組回答正確且有對話脈絡的內容。"
                         )
                     else:
-                        prompt_to_send = f"{current_time_info}\n\n【使用者問題】:\n{user_text}"
+                        prompt_to_send = f"{context_header}{current_time_info}\n\n【使用者問題/Tag】:\n{user_text}"
                 else:
-                    prompt_to_send = f"{current_time_info}\n\n【使用者問題】:\n{user_text}"
+                    prompt_to_send = f"{context_header}{current_time_info}\n\n【使用者問題/Tag】:\n{user_text}"
 
                 response = chat_session.send_message(prompt_to_send)
                 base_reply = response.text.strip() if response and response.text else "抱歉，Gemini 未能產生回應。"
