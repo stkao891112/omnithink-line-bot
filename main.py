@@ -89,6 +89,25 @@ async def callback(request: Request, x_line_signature: str = Header(None)):
     return "OK"
 
 
+def perform_web_search(query: str) -> str:
+    """Perform real-time web search using DDGS."""
+    try:
+        from ddgs import DDGS
+        with DDGS() as ddgs:
+            results = list(ddgs.text(query, max_results=4))
+            if not results:
+                return ""
+            snippets = []
+            for idx, item in enumerate(results, 1):
+                title = item.get("title", "")
+                body = item.get("body", "")
+                snippets.append(f"[{idx}] {title}\n{body}")
+            return "\n\n".join(snippets)
+    except Exception as e:
+        logger.error(f"Web search error: {e}")
+        return ""
+
+
 # Store chat sessions per user_id
 user_chats = {}
 
@@ -122,7 +141,34 @@ if handler:
                     user_chats[user_id] = gemini_model.start_chat(history=[])
                 
                 chat_session = user_chats[user_id]
-                response = chat_session.send_message(user_text)
+                
+                # Real-time search trigger check
+                search_keywords = ["搜尋", "查", "天氣", "新聞", "最新", "今天", "股價", "賽事", "2026", "幾度"]
+                is_search_cmd = user_text.lower().startswith(("/search", "搜尋", "查一下"))
+                should_search = is_search_cmd or any(kw in user_text for kw in search_keywords)
+
+                if should_search:
+                    # Clean search query string
+                    clean_query = user_text
+                    for prefix in ["/search", "搜尋", "幫我查", "查一下", "查"]:
+                        if clean_query.startswith(prefix):
+                            clean_query = clean_query[len(prefix):].strip()
+                    
+                    logger.info(f"Executing real-time web search for query: {clean_query}")
+                    search_info = perform_web_search(clean_query if clean_query else user_text)
+
+                    if search_info:
+                        prompt_to_send = (
+                            f"【即時網路搜尋結果】:\n{search_info}\n\n"
+                            f"【使用者問題】:\n{user_text}\n\n"
+                            f"請綜合參考上述最新搜尋結果，為使用者提供精確、即時且有條理的中文回答。"
+                        )
+                    else:
+                        prompt_to_send = user_text
+                else:
+                    prompt_to_send = user_text
+
+                response = chat_session.send_message(prompt_to_send)
                 reply_text = response.text.strip() if response and response.text else "抱歉，Gemini 未能產生回應。"
             except Exception as e:
                 logger.error(f"Gemini API error for user {user_id}: {e}")
