@@ -398,18 +398,20 @@ if handler:
                 base_reply = response.text.strip() if response and response.text else "抱歉，Gemini 未能產生回應。"
                 return search_header + base_reply
 
-            # Execute AI processing turn with 4.2s hard timeout safety guard
+            # Execute AI processing turn with dynamic timeout (9.0s for Vision images, 4.5s for text)
+            has_cached_img = chat_key in user_image_cache
+            turn_timeout = 9.0 if has_cached_img else 4.5
             try:
                 with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
                     future = executor.submit(_process_ai_turn)
-                    reply_text = future.result(timeout=4.2)
+                    reply_text = future.result(timeout=turn_timeout)
             except concurrent.futures.TimeoutError:
-                logger.warning(f"Total processing for user [{user_id}] hit 4.2s timeout safety guard.")
-                reply_text = "⏱️ 【系統連線提示 Log】\n處理時間已達到 4.2 秒安全上限（LINE 硬性上限為 5 秒）。\n為避免 LINE 連線中斷，已自動停止該次生成，請再試一次或簡化提問！"
+                logger.warning(f"Total processing for user [{user_id}] hit {turn_timeout}s timeout safety guard.")
+                reply_text = "⏱️ 【系統連線提示 Log】\n圖片或對話處理時間較長，已自動切換處理，請稍後再次測試！"
             except Exception as e:
                 logger.error(f"Gemini API error for user {user_id}: {e}")
-                if user_id in user_chats:
-                    del user_chats[user_id]
+                if chat_key in user_chats:
+                    del user_chats[chat_key]
                 reply_text = f"❌ 【系統錯誤 Log】\n- 類型: {type(e).__name__}\n- 詳情: {str(e)}\n\n(已為您重置該次對話 Session)"
 
         # Sanitize reply_text to strictly obey LINE Messaging API 5000 chars limit & UTF-8 control chars
