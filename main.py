@@ -110,39 +110,37 @@ async def callback(request: Request, x_line_signature: str = Header(None)):
 import concurrent.futures
 
 
-def perform_web_search(query: str, timeout: float = 2.2) -> tuple[str, str]:
+def perform_web_search(query: str, timeout: float = 2.5) -> tuple[str, str]:
     """
-    Perform ultra-fast real-time web search using DuckDuckGo Lite (completes in ~0.8s).
+    Perform ultra-fast real-time web search using primp Chrome TLS impersonation (bypasses cloud IP blocking on Render).
     Returns (search_results_text, debug_log_text).
     """
     def _do_search():
         try:
-            import urllib.request
+            import primp
             import urllib.parse
             import re
 
-            url = 'https://lite.duckduckgo.com/lite/'
-            data = urllib.parse.urlencode({'q': query, 'kl': 'tw-tzh'}).encode('utf-8')
-            req = urllib.request.Request(
-                url,
-                data=data,
-                headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-            )
-            with urllib.request.urlopen(req, timeout=2.0) as r:
-                html = r.read().decode('utf-8')
-                links = re.findall(r'<a[^>]+class=["\']result-link["\'][^>]*>(.*?)</a>', html, re.DOTALL)
-                snippets = re.findall(r'<td[^>]+class=["\']result-snippet["\'][^>]*>(.*?)</td>', html, re.DOTALL)
+            client = primp.Client(impersonate="chrome_120", follow_redirects=True, timeout=2.2)
+            url = f"https://html.duckduckgo.com/html/?q={urllib.parse.quote(query)}"
+            resp = client.get(url)
 
-                if not links:
-                    return ("", "⚠️ [搜尋 Log] 未找到相關即時網頁資料。")
+            if resp.status_code != 200:
+                return ("", f"⚠️ [搜尋 Log] 搜尋回應狀態碼 {resp.status_code}")
 
-                results = []
-                for idx in range(min(3, len(links))):
-                    l_clean = re.sub(r'<[^>]+>', '', links[idx]).strip()
-                    s_clean = re.sub(r'<[^>]+>', '', snippets[idx]).strip() if idx < len(snippets) else ''
-                    results.append(f"[{idx+1}] {l_clean}\n{s_clean}")
+            titles = re.findall(r'<a[^>]+class=["\']result__a["\'][^>]*>(.*?)</a>', resp.text, re.DOTALL)
+            snippets = re.findall(r'<a[^>]+class=["\']result__snippet["\'][^>]*>(.*?)</a>', resp.text, re.DOTALL)
 
-                return ("\n\n".join(results), f"✅ [搜尋 Log] 成功獲取 {len(results)} 條即時資料")
+            if not titles:
+                return ("", "⚠️ [搜尋 Log] 未找到相關即時網頁資料。")
+
+            results = []
+            for i in range(min(3, len(titles))):
+                t_clean = re.sub(r'<[^>]+>', '', titles[i]).strip()
+                s_clean = re.sub(r'<[^>]+>', '', snippets[i]).strip() if i < len(snippets) else ""
+                results.append(f"[{i+1}] {t_clean}\n{s_clean}")
+
+            return ("\n\n".join(results), f"✅ [搜尋 Log] 成功獲取 {len(results)} 條即時資料")
         except Exception as e:
             logger.error(f"Web search execution error: {e}")
             return ("", f"⚠️ [搜尋 Log 錯誤] 執行搜尋時發生異常：{e}")
