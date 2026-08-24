@@ -108,6 +108,23 @@ def perform_web_search(query: str) -> str:
         return ""
 
 
+RESET_COMMANDS = [
+    "/reset", "/clear", "/清除記憶", "/重置記憶", "/重置", "/清空", "/清除",
+    "清除記憶", "重置記憶", "清空記憶", "重置對話", "清空對話", "清除對話", "重置"
+]
+
+
+def is_reset_command(text: str) -> bool:
+    """Check if input is a hard reset memory command."""
+    clean_text = text.lower().strip()
+    if clean_text in RESET_COMMANDS:
+        return True
+    for cmd in ["/reset", "/clear", "/清除記憶", "/重置記憶", "/重置", "/清空", "/清除"]:
+        if clean_text.startswith(cmd):
+            return True
+    return False
+
+
 # Store chat sessions per user_id
 user_chats = {}
 
@@ -126,11 +143,14 @@ if handler:
             logger.info("Received LINE Webhook Verify test event. Skipping Gemini call.")
             return
 
-        # Handle reset command
-        if user_text.lower() in ["/reset", "重置", "清空", "清除記憶"]:
+        # Handle hard reset command
+        if is_reset_command(user_text):
             if user_id in user_chats:
                 del user_chats[user_id]
-            reply_text = "🧹 對話記憶已清空！我們可以開始新的話題囉。"
+            if gemini_model:
+                user_chats[user_id] = gemini_model.start_chat(history=[])
+            logger.info(f"HARD RESET: Successfully cleared chat session for user [{user_id}]")
+            reply_text = "🧹【系統通知】對話記憶與歷史已徹底重置！Gemini AI 已恢復為全新初始狀態，我們可以開始新的話題囉。"
         # Check Gemini API setup
         elif not gemini_model:
             reply_text = "⚠️ 系統尚未設定有效的 GEMINI_API_KEY，請在 .env 中填寫金鑰。"
