@@ -259,11 +259,27 @@ def is_pure_tag(text: str) -> bool:
 
 from collections import defaultdict, deque
 
+import time
+
 # Store chat sessions per user/group
 user_chats = {}
 
 # Store rolling chat history per group/room/user (max 20 messages)
 group_chat_history = defaultdict(lambda: deque(maxlen=20))
+
+# Image cache dictionary per chat_key: {chat_key: (PIL_Image, timestamp)}
+user_image_cache = {}
+
+
+def get_recent_cached_image(chat_key: str, max_age_seconds: float = 120.0):
+    """Retrieve cached image for chat_key if within max_age_seconds."""
+    if chat_key in user_image_cache:
+        img, timestamp = user_image_cache[chat_key]
+        if time.time() - timestamp <= max_age_seconds:
+            return img
+        else:
+            del user_image_cache[chat_key]
+    return None
 
 
 # Event handler for TextMessage
@@ -369,7 +385,16 @@ if handler:
                 else:
                     prompt_to_send = f"{context_header}{current_time_info}\n\n【使用者問題/Tag】:\n{user_text}"
 
-                response = chat_session.send_message(prompt_to_send)
+                cached_img = get_recent_cached_image(chat_key)
+                if cached_img:
+                    logger.info(f"Found recent cached image for chat_key [{chat_key}]. Combining image with text question for Gemini Vision!")
+                    prompt_to_send_with_img = f"【使用者隨圖片發問的問題】:\n{prompt_to_send}\n\n請務必看圖並結合使用者的文字發問，用烏薩奇的口吻做出精確回答。"
+                    response = gemini_model.generate_content([prompt_to_send_with_img, cached_img])
+                    if chat_key in user_image_cache:
+                        del user_image_cache[chat_key]
+                else:
+                    response = chat_session.send_message(prompt_to_send)
+
                 base_reply = response.text.strip() if response and response.text else "抱歉，Gemini 未能產生回應。"
                 return search_header + base_reply
 
@@ -421,13 +446,14 @@ if handler:
             logger.error(f"Failed to send LINE reply or push: {e}")
 
 
-# Event handler for ImageMessage (Gemini Vision Image Reading)
+# Event handler for ImageMessage (Gemini Vision Image Reading & Caching)
 if handler:
     @handler.add(MessageEvent, message=ImageMessageContent)
     def handle_image_message(event: MessageEvent):
         user_id = getattr(event.source, "user_id", "default_user")
         source_type = getattr(event.source, "type", "user")
-        logger.info(f"Received IMAGE message from [{user_id}] (source: {source_type}): {event.message.id}")
+        chat_key = getattr(event.source, "group_id", None) or getattr(event.source, "room_id", None) or user_id
+        logger.info(f"Received IMAGE message from [{user_id}] (source: {source_type}, chat_key: {chat_key}): {event.message.id}")
 
         if source_type != "user" and not is_bot_tagged(event):
             logger.info(f"Ignored untagged image in {source_type} chat.")
@@ -449,12 +475,17 @@ if handler:
                         image_bytes = line_bot_blob_api.get_message_content(event.message.id)
 
                     img = PIL.Image.open(io.BytesIO(image_bytes))
+                    
+                    # Store image into user_image_cache for 120 seconds
+                    user_image_cache[chat_key] = (img, time.time())
+                    logger.info(f"Cached image for chat_key [{chat_key}] for 120 seconds.")
+
                     prompt = (
                         "請以烏薩奇的口吻與說話風格（適度加入烏拉！呀哈！等叫聲），"
-                        "使用台灣繁體中文看圖說故事、詳細描述這張圖片的內容、文字或美食！"
+                        "使用台灣繁體中文簡短確認收到圖片，並親切告知使用者：『已為您暫存圖片 📸，您可以隨時打字發問（例如：「這是什麼？」或「幫我翻譯」）囉！』"
                     )
                     response = gemini_model.generate_content([prompt, img])
-                    return response.text.strip() if response and response.text else "呀哈！本烏薩奇看到圖片了，但暫時無解！"
+                    return response.text.strip() if response and response.text else "呀哈！收到圖片囉 📸 烏薩奇已為你暫存這張照片！你可以隨時打字發問囉！"
                 except Exception as e:
                     logger.error(f"Error processing image with Gemini: {e}")
                     return f"❌ 【圖片分析錯誤】看圖失敗：{e}"
