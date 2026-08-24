@@ -221,7 +221,7 @@ def sanitize_line_text(text: str, max_len: int = 4500) -> str:
 
 def is_bot_tagged(event: MessageEvent) -> bool:
     """
-    Check if the message is in a 1-on-1 direct chat, OR if the bot is tagged/mentioned in a group/room chat.
+    Check if the message is in a 1-on-1 direct chat, OR if the bot is strictly tagged/mentioned in a group/room chat.
     """
     source_type = getattr(event.source, "type", "user")
 
@@ -230,17 +230,18 @@ def is_bot_tagged(event: MessageEvent) -> bool:
         return True
 
     # In Group / Room chat: Check if bot is tagged/mentioned
-    # 1. Official LINE Mention API check
+    # 1. Official LINE Mention API check (is_self=True)
     mention = getattr(event.message, "mention", None)
     if mention and hasattr(mention, "mentionees"):
         for m in mention.mentionees:
             if getattr(m, "is_self", False):
                 return True
 
-    # 2. Text keyword tag fallback check (@, 烏薩奇, usagi, bot)
+    # 2. Strict Bot Name Keyword Check ONLY (烏薩奇, usagi, 兔兔)
+    # Avoid checking generic '@' or 'bot' which triggers when tagging other users
     user_text = getattr(event.message, "text", "").lower()
-    for keyword in ["@", "烏薩奇", "usagi", "bot"]:
-        if keyword in user_text:
+    for name in ["烏薩奇", "usagi", "兔兔", "吉伊卡哇"]:
+        if name in user_text:
             return True
 
     return False
