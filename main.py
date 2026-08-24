@@ -219,6 +219,33 @@ def sanitize_line_text(text: str, max_len: int = 4500) -> str:
     return clean
 
 
+def is_bot_tagged(event: MessageEvent) -> bool:
+    """
+    Check if the message is in a 1-on-1 direct chat, OR if the bot is tagged/mentioned in a group/room chat.
+    """
+    source_type = getattr(event.source, "type", "user")
+
+    # In 1-on-1 private chat: Always respond
+    if source_type == "user":
+        return True
+
+    # In Group / Room chat: Check if bot is tagged/mentioned
+    # 1. Official LINE Mention API check
+    mention = getattr(event.message, "mention", None)
+    if mention and hasattr(mention, "mentionees"):
+        for m in mention.mentionees:
+            if getattr(m, "is_self", False):
+                return True
+
+    # 2. Text keyword tag fallback check (@, 烏薩奇, usagi, bot)
+    user_text = getattr(event.message, "text", "").lower()
+    for keyword in ["@", "烏薩奇", "usagi", "bot"]:
+        if keyword in user_text:
+            return True
+
+    return False
+
+
 # Store chat sessions per user_id
 user_chats = {}
 
@@ -229,12 +256,18 @@ if handler:
     def handle_text_message(event: MessageEvent):
         user_text = event.message.text.strip()
         user_id = getattr(event.source, "user_id", "default_user")
-        logger.info(f"Received message from [{user_id}]: {user_text}")
+        source_type = getattr(event.source, "type", "user")
+        logger.info(f"Received message from [{user_id}] (source: {source_type}): {user_text}")
 
         # LINE Verify test event check (skip calling Gemini/reply for dummy tokens)
         DUMMY_REPLY_TOKENS = ["00000000000000000000000000000000", "ffffffffffffffffffffffffffffffff"]
         if event.reply_token in DUMMY_REPLY_TOKENS:
             logger.info("Received LINE Webhook Verify test event. Skipping Gemini call.")
+            return
+
+        # Check if bot is tagged/mentioned in group/room chat
+        if not is_bot_tagged(event):
+            logger.info(f"Ignored untagged message in {source_type} chat.")
             return
 
         # Handle hard reset command
